@@ -4,102 +4,133 @@ import matplotlib.pyplot as plt
 
 import torch
 from torch import nn
-from torch import batch_norm
-from torch.nn import functional as F
 from torch.utils import data
 
 from sklearn.preprocessing import MinMaxScaler
 
+# hyperparameters
+split_ratio = .2
+batch_size = 150
+epochs = 800
+lr = 0.1
+
+# utils
+def plot(arrays, labels = None, xlabel = None, ylabel = None, title = None, grid = True, save = False):
+    assert type(arrays) == tuple
+    plt.clf()
+    for i in range(len(arrays)):
+        if labels is not None:
+            plt.plot(arrays[i], label = labels[i])
+        else:
+            plt.plot(arrays[i])
+    if labels is not None:
+        plt.legend()
+        
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.title(title)
+    if grid:
+        plt.grid()
+    if save:
+        plt.savefig('./' + title + '.png')
+ 
+# preprocess data       
+def preprocess_data(train_raw, test_raw, split_ratio = 0.2):
+    # Data Preprocess
+    test_raw['temp'] = np.zeros_like(test_raw.iloc[:, 0])
+    train_data = train_raw.values
+    test_data = test_raw.values
+    
+    # Min-Max Scale
+    scale = MinMaxScaler()
+    train_scaled = scale.fit_transform(train_data)
+    test_scaled = scale.transform(test_data)[:, :-1]
+    
+    # Split Data to Get Valid Set
+    train_num = int((1 - split_ratio) * train_scaled.shape[0])
+    train = torch.FloatTensor(train_scaled[:train_num, :])
+    valid = torch.FloatTensor(train_scaled[train_num:, :])
+    test = torch.FloatTensor(test_scaled)
+    
+    return train, valid, test, scale
+
+# load dataset
 def load_Dataset(data_arrays, batch_size, shuffle = True):
+    # Load Dataset
     dataset = data.TensorDataset(*data_arrays)
     return data.DataLoader(dataset, batch_size, shuffle)
 
-def preprocess_data(train_set, test_set):
-    # Data Preprocess
-    features = train_set.iloc[:, :-1].values
-    labels = train_set.iloc[:, -1].values
-
-    # Min-Max Scale
-    scale = MinMaxScaler()
-    features_scaled = scale.fit_transform(features)
-    test_set_scaled = scale.transform(test_set.values)
-
-    labels_scaled = labels / 100
-    
-    # transfer these parameters to tensor
-    features_scaled_tensor = torch.FloatTensor(features_scaled)
-    labels_scaled_tensor = torch.FloatTensor(labels_scaled)
-    test_tensor = torch.FloatTensor(test_set_scaled)
-    
-    return features_scaled_tensor, labels_scaled_tensor, test_tensor
-    
-def train(model, loss, Optimizer, train_iter):
-    loss_list = []
+def train_model(model, loss, optimizer, train_iter, valid_iter, epochs):
+    train_loss_list = []
+    valid_loss_list = []
     for epoch in range(epochs):
-        l_sum = 0
+        train_loss = 0
+        model.train()
         for X, y in train_iter:
             l = loss(model(X).reshape(-1), y)
-            Optimizer.zero_grad()
+            optimizer.zero_grad()
             l.backward()
-            Optimizer.step()
-            l_sum += float(l)
-        loss_list.append(l_sum)
-        print(f'epoch: {epoch}, loss: {l_sum:.3f}')
+            optimizer.step()
+            train_loss += float(l)
+        train_loss_list.append(train_loss)
         
-    plt.plot(loss_list)
-    plt.title('MSE loss')
-    plt.xlabel('epoch')
-    plt.ylabel('loss')
-    plt.savefig('./loss.png')
+        valid_loss = 0
+        model.eval()
+        with torch.no_grad():
+            for X, y in valid_iter:
+                valid_loss += float(loss(model(X).reshape(-1), y))
+            valid_loss_list.append(valid_loss)
+        
+        print(f'epoch: {epoch}, train loss: {train_loss:.3f}, test loss: {valid_loss:.3f}')
     
-# hyperparameters
-batch_size = 100
-lr = 0.1
-epochs = 20
+    plot((train_loss_list, valid_loss_list), labels = ('train loss', 'valid loss',),
+         xlabel = 'epoch', ylabel = 'MSE loss', title = 'loss', save = True)
 
 if __name__ == '__main__':
-    # Read Data
-    train_set = pd.read_csv('./Data/covid.train.csv')
-    test_set = pd.read_csv('./Data/covid.test.csv')
+    # read data
+    train_raw = pd.read_csv('./Data/covid.train.csv')
+    test_raw = pd.read_csv('./Data/covid.test.csv')
     
-    #Preprocess
-    features, labels, test = preprocess_data(train_set, test_set)
-    
-    # Load Dataset
-    train_iter = load_Dataset((features, labels), batch_size)
-    
-    # Define Model, loss, Optimizer, and train
+    train, valid, test, scale = preprocess_data(train_raw, test_raw)
+    train_iter = load_Dataset((train[:, :-1], train[:, -1]), batch_size)
+    valid_iter = load_Dataset((valid[:, :-1], valid[:, -1]), batch_size)
     model = nn.Sequential(
         nn.Linear(94, 128), nn.ReLU(),
+        nn.Dropout(0.4),
         nn.Linear(128, 128), nn.ReLU(),
+        nn.Dropout(0.4),
         nn.Linear(128, 1)
     )
-
     loss = nn.MSELoss()
-    Optimizer = torch.optim.SGD(model.parameters(), lr)
+    optimizer = torch.optim.SGD(model.parameters(), lr)
 
-    train(model, loss, Optimizer, train_iter)
+    train_model(model, loss, optimizer, train_iter, valid_iter, epochs)
     
+    # plot curves
+    model.eval()
     with torch.no_grad():
-        predictions = model(features.detach()).reshape(-1)
+        # on train set
+        train_pred = model(train[:, :-1]).reshape(-1)
+        plot((train_pred, train[:, -1]), labels = ('predictions', 'labels'),
+            title= 'train set', save = True)
         
-        plt.clf()
-        plt.plot(predictions, label = 'predictions')
-        plt.plot(labels, label = 'labels')
-        plt.legend()
-        plt.title('train set')
-        plt.savefig('./train_set.png')
-
+        # on valid set
+        valid_pred = model(valid[:, :-1]).reshape(-1)
+        plot((valid_pred, valid[:, -1]), labels = ('predictions', 'labels'),
+            title= 'valid set', save = True)
+        
+        # on test set
+        test_pred = model(test).detach().numpy().reshape(-1)
+        plot((test_pred,), title = 'test set', save = True)
+        
+    # inverse scale
+    temp = np.zeros_like(test_raw)
+    temp[:, -1] = test_pred
+    test_positive = scale.inverse_transform(temp)[:, -1]
     
-    test_pred = model(test).reshape(-1, 1).detach().numpy()
-    
-    plt.clf()
-    plt.plot(test_pred)
-    plt.title('test set')
-    plt.savefig('./test_set.png')
-    
-    id = np.arange(test_pred.shape[0], dtype = int).reshape(-1, 1)
-    Submission = pd.DataFrame(np.concatenate((id, test_pred * 100), axis = 1), 
+    # get submission
+    id = range(len(test_pred))
+    Submission = pd.DataFrame(list(zip(id, test_positive)), 
                             columns = ['id', 'tested_positive'])
-    Submission.set_index(['id'], inplace=True)
+    Submission.set_index(['id'], inplace = True)
     Submission.to_csv('./Submission.csv')
