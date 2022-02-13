@@ -15,3 +15,7 @@ Slides: https://github.com/Fafa-DL/Lhy_Machine_Learning
 **Contents**:
 
 1. Introduction of Machine Learning & Deep Learning (2022/2/11)
+
+**Homework**:
+
+1. HW1 Covid-19 Regression (2022/2/13)
