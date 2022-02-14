@@ -15,6 +15,7 @@ Slides: https://github.com/Fafa-DL/Lhy_Machine_Learning
 **Contents**:
 
 1. Introduction of Machine Learning & Deep Learning (2022/2/11)
+2. General Guidance (2022/2/14)
 
 **Homework**:
 
